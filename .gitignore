@@ -34,5 +34,4 @@ Thumbs.db
 # Vector Stores & Uploads
 faiss_index/
 qdrant_db/
-chroma_db/
 uploaded_docs/
