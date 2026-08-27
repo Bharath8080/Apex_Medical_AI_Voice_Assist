@@ -22,4 +22,6 @@ dependencies = [
     "langchain-qdrant>=1.1.0",
     "qdrant-client>=1.19.0",
     "faiss-cpu>=1.15.0",
+    "langchain-tavily>=0.2.18",
+    "langgraph>=1.2.2",
 ]

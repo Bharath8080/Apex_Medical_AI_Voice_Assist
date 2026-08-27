@@ -8,6 +8,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY", "")).strip()
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "").strip()
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
 # Groq STT & LLM
 GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")

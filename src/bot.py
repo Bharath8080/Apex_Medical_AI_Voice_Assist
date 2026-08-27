@@ -43,9 +43,13 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.processors.frameworks.langchain import LangchainProcessor
 from langchain_core.runnables import RunnableLambda
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import tool
 from langchain_groq import ChatGroq
+from langchain_tavily import TavilySearch
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+import os
 
 from src import config, rag_engine
 
@@ -181,55 +185,80 @@ async def run_bot(websocket_client):
         strategy_type=ServiceSwitcherStrategyFailover,
     )
 
-    # 2. LLM & LangChain RAG Chain
+    # 2. LLM + LangGraph ReAct Agent with 2 Tools: RAG & Web Search
     groq_llm = ChatGroq(
         model=config.GROQ_MODEL,
         groq_api_key=config.GROQ_API_KEY,
         temperature=config.LLM_TEMPERATURE,
-    #     reasoning_effort="none",
     )
 
-    def extract_query(x) -> str:
-        if isinstance(x, dict):
-            return str(x.get("input", "") or "")
-        return str(x)
+    # Tool 1: Hospital Guide RAG (ChromaDB)
+    @tool
+    def rag_search(query: str) -> str:
+        """Search the Apex Care Hospital internal knowledge base for policies, visiting hours,
+        diagnostic test preparation, insurance rules, prescription refill policies, and clinical guidelines.
+        Always call this tool first for any hospital-related question."""
+        return rag_engine.retrieve_context(query, top_k=3)
 
-    def get_context(query_or_dict) -> str:
-        q = extract_query(query_or_dict)
-        return rag_engine.retrieve_context(q, top_k=3)
-
-    rag_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                (
-                    "You are the warm, professional AI Medical Receptionist for Apex Care Hospital & Medical Center. "
-                    "Answer patient and visitor questions accurately using the retrieved hospital guide context.\n\n"
-                    "Clinical Safety Guidelines:\n"
-                    "- As an administrative receptionist, never diagnose medical conditions, interpret test results, or prescribe medication dosages.\n"
-                    "- If a caller or patient mentions severe emergency symptoms (such as crushing chest pain, difficulty breathing, or sudden stroke signs), immediately advise them to call 911 or proceed to the Emergency Room.\n"
-                    "- If information is not in the context, politely state that and offer to connect them with the front desk.\n\n"
-                    "Voice Output Rules:\n"
-                    "- Keep responses concise, clear, and natural for spoken audio conversation.\n"
-                    "- Do not use markdown formatting, asterisks, bullet points, emojis, or special symbols.\n\n"
-                    "Hospital Guide Context:\n{context}"
-                ),
-            ),
-            ("human", "{input}"),
-        ]
+    # Tool 2: Real-Time Web Search (Tavily)
+    os.environ.setdefault("TAVILY_API_KEY", config.TAVILY_API_KEY)
+    web_search = TavilySearch(
+        max_results=3,
+        topic="general",
+        search_depth="basic",
+    )
+    web_search.name = "web_search"
+    web_search.description = (
+        "Search the internet for real-time medical information, current drug interactions, "
+        "recent health news, or any question that cannot be answered by the hospital guide. "
+        "Use this only when the RAG tool returns no relevant results."
     )
 
-    rag_chain = (
-        {
-            "context": RunnableLambda(get_context),
-            "input": RunnableLambda(extract_query),
-        }
-        | rag_prompt
-        | groq_llm
-        | StrOutputParser()
+    tools = [rag_search, web_search]
+
+    system_prompt = (
+        "You are the warm, professional AI Medical Receptionist for Apex Care Hospital & Medical Center. "
+        "You have access to two tools:\n"
+        "1. rag_search: Search the hospital's internal knowledge base (visiting hours, test prep, insurance, policies).\n"
+        "2. web_search: Search the internet for real-time medical information not found in hospital records.\n\n"
+        "Always call rag_search first. Only use web_search if the hospital guide has no relevant answer.\n\n"
+        "Clinical Safety Rules:\n"
+        "- Never diagnose conditions, interpret lab results, or suggest medication dosages.\n"
+        "- For severe emergencies (chest pain, stroke signs, difficulty breathing), immediately advise calling 911.\n"
+        "- If neither tool has the answer, offer to connect the patient with the front desk.\n\n"
+        "Voice Output Rules:\n"
+        "- Keep responses concise and natural for spoken audio. No markdown, bullets, or special symbols."
     )
 
-    langchain_processor = LangchainProcessor(chain=rag_chain)
+    memory = MemorySaver()
+    agent = create_react_agent(
+        model=groq_llm,
+        tools=tools,
+        prompt=system_prompt,
+        checkpointer=memory,
+    )
+
+    # Thread ID per session for MemorySaver conversation continuity
+    _thread_id = {"configurable": {"thread_id": "apex-session-1"}}
+
+    def agent_chain(x):
+        """Extracts user query, runs the LangGraph agent, and returns the final text response."""
+        query = str(x.get("input", "") or "") if isinstance(x, dict) else str(x)
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": query}]},
+            config=_thread_id,
+        )
+        # Extract the last AI message content
+        messages = result.get("messages", [])
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None)
+            if content and getattr(msg, "type", "") in ("ai", "AIMessage", "assistant"):
+                return content
+            if content and msg.__class__.__name__ == "AIMessage":
+                return content
+        return ""
+
+    langchain_processor = LangchainProcessor(chain=RunnableLambda(agent_chain))
 
     # 3. TTS with Failover (1st: ElevenLabs, 2nd: Deepgram Fallback, 3rd: Cartesia)
     elevenlabs_tts = ElevenLabsTTSService(
