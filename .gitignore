@@ -1,0 +1,38 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets and Environment Variables
+.env
+*.env.local
+
+# Python cache & build files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+
+# Node / Frontend build files
+node_modules/
+dist/
+.vite/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Vector Stores & Uploads
+faiss_index/
+qdrant_db/
+chroma_db/
+uploaded_docs/
