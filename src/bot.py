@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 from loguru import logger
@@ -192,14 +193,42 @@ async def run_bot(websocket_client):
         temperature=config.LLM_TEMPERATURE,
     )
 
+    loop = asyncio.get_running_loop()
+
+    def notify_tool(name: str, state: str, input_data: dict, output_data: str = ""):
+        try:
+            payload = json.dumps({
+                "type": "tool_call",
+                "toolPart": {
+                    "type": name,
+                    "state": state,
+                    "input": input_data,
+                    "output": output_data,
+                }
+            })
+            asyncio.run_coroutine_threadsafe(websocket_client.send_text(payload), loop)
+        except Exception:
+            pass
+
     @tool
     def rag_search(query: str) -> str:
         """Search Apex Care Hospital's knowledge base: visiting hours, test prep, insurance, policies, prescriptions."""
-        return rag_engine.retrieve_context(query, top_k=3)
+        notify_tool("rag_search", "input-streaming", {"query": query})
+        res = rag_engine.retrieve_context(query, top_k=3)
+        notify_tool("rag_search", "output-available", {"query": query}, res)
+        return res
 
     os.environ.setdefault("TAVILY_API_KEY", config.TAVILY_API_KEY)
-    web_search = TavilySearch(max_results=3, search_depth="basic", name="web_search",
-                              description="Search the internet for real-time medical info not found in the hospital guide.")
+    tavily_search = TavilySearch(max_results=3, search_depth="basic")
+
+    @tool
+    def web_search(query: str) -> str:
+        """Search the internet for real-time medical info not found in the hospital guide."""
+        notify_tool("web_search", "input-streaming", {"query": query})
+        res = tavily_search.invoke(query)
+        res_str = str(res)
+        notify_tool("web_search", "output-available", {"query": query}, res_str)
+        return res_str
 
     system_prompt = (
         "You are the AI Medical Receptionist for Apex Care Hospital. "

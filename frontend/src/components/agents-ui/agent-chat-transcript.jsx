@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 import { MessageSquare, Trash2, X, Sparkles, Send } from 'lucide-react';
 import { Response } from '../ui/response';
+import { Tool } from '../ui/tool';
 
 export function AgentChatTranscript({
   messages = [],
@@ -70,6 +71,17 @@ export function AgentChatTranscript({
           </div>
         ) : (
           messages.map((m, i) => {
+            if (m.type === 'tool' || m.toolPart) {
+              return (
+                <div key={i} className="w-full flex flex-col items-start max-w-full">
+                  <span className="font-outfit text-[11px] font-bold uppercase tracking-wider text-cyan-400/80 mb-1 px-1">
+                    TOOL CALL
+                  </span>
+                  <Tool toolPart={m.toolPart} defaultOpen={false} />
+                </div>
+              );
+            }
+
             const isUser = m.role === 'user';
             return (
               <div key={i} className={cn('flex flex-col max-w-full', isUser ? 'items-end' : 'items-start')}>

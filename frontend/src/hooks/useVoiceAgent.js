@@ -293,6 +293,19 @@ export function useVoiceAgent(wsUrl = DEFAULT_WS_URL) {
                 }
                 return updated;
               });
+            } else if (data.type === 'tool_call') {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const existingIdx = updated.findLastIndex(
+                  (m) => m.type === 'tool' && m.toolPart?.type === data.toolPart?.type && m.toolPart?.state === 'input-streaming'
+                );
+                if (existingIdx !== -1 && data.toolPart?.state === 'output-available') {
+                  updated[existingIdx] = { type: 'tool', toolPart: data.toolPart };
+                } else {
+                  updated.push({ type: 'tool', toolPart: data.toolPart });
+                }
+                return updated;
+              });
             } else if (data.type === 'bot_transcript') {
               setMessages((prev) => {
                 const updated = [...prev];
