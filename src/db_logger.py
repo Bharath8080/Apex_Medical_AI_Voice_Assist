@@ -1,12 +1,9 @@
 import json
-import os
-import sqlite3
 from groq import Groq
 import httpx
 from pydantic import BaseModel, Field
 from src import config
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "patient_records.db")
 groq_client = Groq(api_key=config.GROQ_API_KEY)
 
 
@@ -17,112 +14,45 @@ class CallRecord(BaseModel):
     insurance_provider: str = Field(default="", description="Insurance provider name")
     chief_complaint: str = Field(default="", description="Primary symptoms or reason for visit")
     appointment_time: str = Field(default="", description="Agreed date and time of appointment")
-    booking_status: str = Field(default="Inquiry Only", description="Booked, Inquiry Only, or Looked Up")
-    call_summary: str = Field(default="", description="2 to 3 sentence concise call summary")
+    booking_status: str = Field(default="Inquiry Only", description="Booked or Inquiry Only")
+    call_summary: str = Field(default="", description="Concise call summary")
     call_outcome: str = Field(default="", description="High level outcome of the call")
     raw_transcript: str = Field(default="", description="Full conversation transcript text")
 
 
-def init_database() -> None:
-    """
-    Initialize SQLite database table for storing patient records and call summaries.
-    """
-    connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS call_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            patient_name TEXT,
-            patient_email TEXT,
-            patient_phone TEXT,
-            insurance_provider TEXT,
-            chief_complaint TEXT,
-            appointment_time TEXT,
-            booking_status TEXT,
-            call_summary TEXT,
-            call_outcome TEXT,
-            raw_transcript TEXT
-        )
-        """
-    )
-
-    connection.commit()
-    connection.close()
-
-
-init_database()
-
-
 def save_call_record(record: CallRecord) -> None:
     """
-    Save structured Pydantic CallRecord into SQLite and optionally sync to Supabase.
+    Save structured Pydantic CallRecord directly into Supabase table `call_logs`.
     """
-    connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    supabase_url = config.SUPABASE_URL
+    supabase_key = config.SUPABASE_KEY
 
-    insert_query = """
-        INSERT INTO call_logs (
-            patient_name,
-            patient_email,
-            patient_phone,
-            insurance_provider,
-            chief_complaint,
-            appointment_time,
-            booking_status,
-            call_summary,
-            call_outcome,
-            raw_transcript
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
+    if not supabase_url or not supabase_key:
+        return
 
-    values = (
-        record.patient_name,
-        record.patient_email,
-        record.patient_phone,
-        record.insurance_provider,
-        record.chief_complaint,
-        record.appointment_time,
-        record.booking_status,
-        record.call_summary,
-        record.call_outcome,
-        record.raw_transcript,
-    )
+    try:
+        endpoint = f"{supabase_url.rstrip('/')}/rest/v1/call_logs"
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
 
-    cursor.execute(insert_query, values)
-    connection.commit()
-    connection.close()
-
-    # Optional Supabase sync if credentials exist
-    supabase_url = os.getenv("SUPABASE_URL", "").strip()
-    supabase_key = (
-        os.getenv("SUPABASE_KEY", "").strip()
-        or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    )
-
-    if supabase_url and supabase_key:
-        try:
-            endpoint = f"{supabase_url.rstrip('/')}/rest/v1/call_logs"
-            headers = {
-                "apikey": supabase_key,
-                "Authorization": f"Bearer {supabase_key}",
-                "Content-Type": "application/json",
-            }
-            httpx.post(
-                endpoint,
-                headers=headers,
-                json=record.model_dump(),
-                timeout=5.0,
-            )
-        except Exception:
-            pass
+        httpx.post(
+            endpoint,
+            headers=headers,
+            json=record.model_dump(),
+            timeout=10.0,
+        )
+    except Exception:
+        pass
 
 
 def extract_and_log_call(messages: list[dict]) -> None:
     """
-    Extract structured intake fields and summary from the call transcript using Groq.
+    Extract structured intake fields and summary from the call transcript using Groq
+    and save directly to Supabase.
     """
     if not messages:
         return
@@ -148,9 +78,9 @@ def extract_and_log_call(messages: list[dict]) -> None:
         "- insurance_provider (string)\n"
         "- chief_complaint (string)\n"
         "- appointment_time (string)\n"
-        "- booking_status (Booked | Inquiry Only | Looked Up)\n"
+        "- booking_status (Booked | Inquiry Only)\n"
         "- call_summary (concise 2-3 sentences)\n"
-        "- call_outcome (Appointment Booked | General Inquiry | Insurance Inquiry | Appointment Lookup | Emergency)\n"
+        "- call_outcome (Appointment Booked | General Inquiry | Insurance Inquiry | Emergency)\n"
         "Output ONLY valid JSON."
     )
 
