@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import sys
+import uuid
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -53,7 +54,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 import os
 
-from src import config, rag_engine, calcom_engine
+from src import config, rag_engine, calcom_engine, db_logger
 
 logger.remove()
 logger.add(
@@ -88,7 +89,7 @@ class FastAPIRealtimeSerializer(FrameSerializer):
         return None
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 
 
@@ -108,12 +109,25 @@ class BotStatePayload(BaseModel):
     state: str
 
 
+class ToolPart(BaseModel):
+    type: str
+    state: str
+    input: dict = Field(default_factory=dict)
+    output: str = ""
+
+
+class ToolCallPayload(BaseModel):
+    type: Literal["tool_call"] = "tool_call"
+    toolPart: ToolPart
+
+
 class TranscriptBroadcaster(FrameProcessor):
     """Transmits live user STT, bot streaming text, and state synchronization directly to the UI."""
 
-    def __init__(self, websocket):
+    def __init__(self, websocket, session_history: list | None = None):
         super().__init__()
         self._ws = websocket
+        self._history = session_history if session_history is not None else []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -125,9 +139,11 @@ class TranscriptBroadcaster(FrameProcessor):
             if frame.text and frame.text.strip():
                 await self._send(UserTranscriptPayload(text=frame.text.strip(), final=True))
                 await self._send(BotStatePayload(state="thinking"))
+                self._history.append({"role": "user", "text": frame.text.strip()})
         elif isinstance(frame, TextFrame):
             if frame.text:
                 await self._send(BotTranscriptPayload(text=frame.text))
+                self._history.append({"role": "assistant", "text": frame.text.strip()})
         elif isinstance(frame, BotStartedSpeakingFrame):
             await self._send(BotStatePayload(state="speaking"))
         elif isinstance(frame, BotStoppedSpeakingFrame):
@@ -144,20 +160,32 @@ class TranscriptBroadcaster(FrameProcessor):
             pass
 
 
+
 async def run_bot(websocket_client):
+    vad = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.7,
+            start_secs=0.2,
+            stop_secs=0.8,
+            min_volume=0.6,
+        )
+    )
+    turn_analyzer = LocalSmartTurnAnalyzerV3()
+
     transport = FastAPIWebsocketTransport(
         websocket=websocket_client,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-            turn_analyzer=LocalSmartTurnAnalyzerV3(),
+            vad_analyzer=vad,
+            turn_analyzer=turn_analyzer,
             serializer=FastAPIRealtimeSerializer(),
             audio_in_sample_rate=16000,
             audio_out_sample_rate=24000,
         ),
     )
+
 
     # 1. STT with 3-Tier Failover
     elevenlabs_stt = ElevenLabsRealtimeSTTService(
@@ -198,18 +226,21 @@ async def run_bot(websocket_client):
 
     def notify_tool(name: str, state: str, input_data: dict, output_data: str = ""):
         try:
-            payload = json.dumps({
-                "type": "tool_call",
-                "toolPart": {
-                    "type": name,
-                    "state": state,
-                    "input": input_data,
-                    "output": output_data,
-                }
-            })
-            asyncio.run_coroutine_threadsafe(websocket_client.send_text(payload), loop)
+            payload = ToolCallPayload(
+                toolPart=ToolPart(
+                    type=name,
+                    state=state,
+                    input=input_data,
+                    output=output_data,
+                )
+            )
+            asyncio.run_coroutine_threadsafe(
+                websocket_client.send_text(payload.model_dump_json()),
+                loop,
+            )
         except Exception:
             pass
+
 
     @tool
     def rag_search(query: str) -> str:
@@ -240,10 +271,17 @@ async def run_bot(websocket_client):
         return res
 
     @tool
-    def book_appointment(start_time: str, name: str, email: str, time_zone: str = "Asia/Kolkata") -> str:
-        """Book a doctor appointment on Cal.com once patient agrees on a slot and provides their full name and email."""
+    def book_appointment(
+        start_time: str,
+        name: str,
+        email: str,
+        insurance_provider: str = "",
+        reason_for_visit: str = "",
+        time_zone: str = "Asia/Kolkata",
+    ) -> str:
+        """Book a doctor appointment on Cal.com with patient intake details (insurance and reason for visit)."""
         notify_tool("book_appointment", "input-streaming", {"start": start_time, "name": name, "email": email})
-        res = calcom_engine.book_appointment(start_time, name, email, time_zone)
+        res = calcom_engine.book_appointment(start_time, name, email, insurance_provider, reason_for_visit, time_zone)
         notify_tool("book_appointment", "output-available", {"start": start_time, "name": name, "email": email}, res)
         return res
 
@@ -251,37 +289,51 @@ async def run_bot(websocket_client):
 
     system_prompt = (
         f"Today's date and time is {current_time_str}.\n"
-        "You are the warm, professional AI Medical Receptionist for Apex Care Hospital.\n"
-        "You have access to 4 tools:\n"
-        "1. rag_search: Search internal hospital policies, visiting hours, test prep, insurance.\n"
-        "2. web_search: Search the internet for general medical info or drug questions.\n"
-        "3. check_available_slots: Fetch open doctor appointment slots on Cal.com.\n"
-        "4. book_appointment: Confirm a booking on Cal.com using start_time (ISO 8601), name, and email.\n\n"
-        "Appointment Scheduling Flow:\n"
-        "- When a patient asks to book an appointment (e.g., 'for tomorrow' or 'next Monday'), resolve the exact date using today's date and call check_available_slots to find open timings.\n"
-        "- Suggest 2-3 specific time options to the caller.\n"
-        "- Once the patient chooses a slot, ask for their full name and email address.\n"
-        "- Confirm the email back to the patient to ensure voice transcription accuracy before calling book_appointment.\n\n"
+        "You are the warm, professional AI Medical Receptionist for Apex Care Hospital.\n\n"
+        "VOICE CONVERSATION GUIDELINES:\n"
+        "- Speak naturally in short, warm sentences (1 to 2 spoken sentences per turn).\n"
+        "- NEVER repeat the date or day multiple times when listing slots. Say: 'On Wednesday, August 31st, we have openings at 8:00 AM, 8:30 AM, or 9:00 AM. Which works best for you?'\n"
+        "- NEVER use bullet points, numbered lists, markdown (*, _, #), or parenthesis.\n\n"
+        "STEP-BY-STEP APPOINTMENT INTAKE (ASK IN 2 NATURAL STEPS — NEVER ASK ALL 4 AT ONCE):\n"
+        "1. Check Slots: Call check_available_slots and offer 2-3 open times in one clean sentence.\n"
+        "2. Step 1 (Name & Email): Once the caller picks a slot, ask ONLY for their Full Name and Email address (e.g. 'Great, 9:00 AM. May I have your full name and email address?').\n"
+        "3. Step 2 (Insurance & Symptoms): Once they provide name and email, ask for their Insurance Provider and Reason for visit (e.g. 'Thank you. What is your insurance provider, and what symptoms bring you in today?').\n"
+        "4. Confirm & Book: Read the email back to ensure accuracy, call book_appointment, and remind them to arrive 10 minutes early.\n\n"
+        "MANDATORY TOOL USAGE RULES:\n"
+        "- Do NOT answer from internal memory. Always call the relevant tool first to retrieve verified facts.\n"
+        "- rag_search: Hospital policies, visiting hours, test prep, accepted insurance, departments.\n"
+        "- web_search: General medical topics, drug interactions, symptoms, or medical knowledge.\n"
+        "- check_available_slots: Checking open doctor appointment slots on Cal.com.\n"
+        "- book_appointment: Confirming a booking on Cal.com.\n\n"
         "Clinical Safety Rules:\n"
-        "- Never diagnose conditions, interpret lab results, or suggest medication dosages.\n"
-        "- For emergencies (chest pain, stroke, breathing difficulty), advise calling 911 immediately.\n"
-        "- Keep responses concise and natural for voice — 1 to 2 spoken sentences, no markdown or special symbols."
+        "- Never diagnose conditions, interpret lab values, or prescribe medication dosages.\n"
+        "- For medical emergencies (chest pain, stroke, severe breathing difficulty), advise calling 911 immediately."
     )
+
+
 
     agent = create_react_agent(
         model=groq_llm,
-        tools=[rag_search, web_search, check_available_slots, book_appointment],
+        tools=[
+            rag_search,
+            web_search,
+            check_available_slots,
+            book_appointment,
+        ],
         prompt=system_prompt,
         checkpointer=MemorySaver(),
     )
+
+    session_thread_id = str(uuid.uuid4())
 
     def agent_chain(x):
         query = str(x.get("input", "") or "") if isinstance(x, dict) else str(x)
         result = agent.invoke(
             {"messages": [{"role": "user", "content": query}]},
-            config={"configurable": {"thread_id": "apex-session-1"}},
+            config={"configurable": {"thread_id": session_thread_id}},
         )
         return result["messages"][-1].content
+
 
     langchain_processor = LangchainProcessor(chain=RunnableLambda(agent_chain))
 
@@ -320,11 +372,13 @@ async def run_bot(websocket_client):
     context = LLMContext([])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(vad_analyzer=vad),
     )
 
-    user_transcripts = TranscriptBroadcaster(websocket_client)
-    bot_transcripts = TranscriptBroadcaster(websocket_client)
+
+    session_history = []
+    user_transcripts = TranscriptBroadcaster(websocket_client, session_history)
+    bot_transcripts = TranscriptBroadcaster(websocket_client, session_history)
 
     pipeline = Pipeline(
         [
@@ -354,13 +408,15 @@ async def run_bot(websocket_client):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected to Voice Pipeline via FastAPI WebSocket.")
-        greeting = "Hello! Thank you for calling Apex Care Medical Center. I am your AI receptionist. How can I help you today?"
-        await bot_transcripts.process_frame(TextFrame(text=greeting), FrameDirection.DOWNSTREAM)
+
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected from voice pipeline.")
+        logger.info("Client disconnected from voice pipeline. Triggering post-call extraction...")
         await task.queue_frames([EndFrame()])
+        if session_history:
+            asyncio.create_task(asyncio.to_thread(db_logger.extract_and_log_call, session_history))
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)
+
