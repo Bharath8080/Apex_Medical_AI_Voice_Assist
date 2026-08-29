@@ -192,71 +192,38 @@ async def run_bot(websocket_client):
         temperature=config.LLM_TEMPERATURE,
     )
 
-    # Tool 1: Hospital Guide RAG (ChromaDB)
     @tool
     def rag_search(query: str) -> str:
-        """Search the Apex Care Hospital internal knowledge base for policies, visiting hours,
-        diagnostic test preparation, insurance rules, prescription refill policies, and clinical guidelines.
-        Always call this tool first for any hospital-related question."""
+        """Search Apex Care Hospital's knowledge base: visiting hours, test prep, insurance, policies, prescriptions."""
         return rag_engine.retrieve_context(query, top_k=3)
 
-    # Tool 2: Real-Time Web Search (Tavily)
     os.environ.setdefault("TAVILY_API_KEY", config.TAVILY_API_KEY)
-    web_search = TavilySearch(
-        max_results=3,
-        topic="general",
-        search_depth="basic",
-    )
-    web_search.name = "web_search"
-    web_search.description = (
-        "Search the internet for real-time medical information, current drug interactions, "
-        "recent health news, or any question that cannot be answered by the hospital guide. "
-        "Use this only when the RAG tool returns no relevant results."
-    )
-
-    tools = [rag_search, web_search]
+    web_search = TavilySearch(max_results=3, search_depth="basic", name="web_search",
+                              description="Search the internet for real-time medical info not found in the hospital guide.")
 
     system_prompt = (
-        "You are the warm, professional AI Medical Receptionist for Apex Care Hospital & Medical Center. "
-        "You have access to two tools:\n"
-        "1. rag_search: Search the hospital's internal knowledge base (visiting hours, test prep, insurance, policies).\n"
-        "2. web_search: Search the internet for real-time medical information not found in hospital records.\n\n"
-        "Always call rag_search first. Only use web_search if the hospital guide has no relevant answer.\n\n"
-        "Clinical Safety Rules:\n"
-        "- Never diagnose conditions, interpret lab results, or suggest medication dosages.\n"
-        "- For severe emergencies (chest pain, stroke signs, difficulty breathing), immediately advise calling 911.\n"
-        "- If neither tool has the answer, offer to connect the patient with the front desk.\n\n"
-        "Voice Output Rules:\n"
-        "- Keep responses concise and natural for spoken audio. No markdown, bullets, or special symbols."
+        "You are the AI Medical Receptionist for Apex Care Hospital. "
+        "Use rag_search first for any hospital-related question. "
+        "Use web_search only if the hospital guide has no relevant answer. "
+        "Never diagnose, interpret labs, or suggest dosages. "
+        "For emergencies (chest pain, stroke, breathing difficulty), advise calling 911 immediately. "
+        "Keep responses concise and natural for voice — no markdown or special symbols."
     )
 
-    memory = MemorySaver()
     agent = create_react_agent(
         model=groq_llm,
-        tools=tools,
+        tools=[rag_search, web_search],
         prompt=system_prompt,
-        checkpointer=memory,
+        checkpointer=MemorySaver(),
     )
 
-    # Thread ID per session for MemorySaver conversation continuity
-    _thread_id = {"configurable": {"thread_id": "apex-session-1"}}
-
     def agent_chain(x):
-        """Extracts user query, runs the LangGraph agent, and returns the final text response."""
         query = str(x.get("input", "") or "") if isinstance(x, dict) else str(x)
         result = agent.invoke(
             {"messages": [{"role": "user", "content": query}]},
-            config=_thread_id,
+            config={"configurable": {"thread_id": "apex-session-1"}},
         )
-        # Extract the last AI message content
-        messages = result.get("messages", [])
-        for msg in reversed(messages):
-            content = getattr(msg, "content", None)
-            if content and getattr(msg, "type", "") in ("ai", "AIMessage", "assistant"):
-                return content
-            if content and msg.__class__.__name__ == "AIMessage":
-                return content
-        return ""
+        return result["messages"][-1].content
 
     langchain_processor = LangchainProcessor(chain=RunnableLambda(agent_chain))
 
