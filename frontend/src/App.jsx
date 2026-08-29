@@ -182,20 +182,39 @@ export function App() {
 
             {/* Subtitle status with Fluid ShimmeringText Animation */}
             {(() => {
+              const latestToolMessage = [...messages].reverse().find((m) => m.type === 'tool' && m.toolPart);
+              const isToolRunning = latestToolMessage && latestToolMessage.toolPart?.state === 'input-streaming';
+              const activeToolType = latestToolMessage?.toolPart?.type;
+
+              const TOOL_STATUS_LABELS = {
+                rag_search: 'Searching Apex Hospital Knowledge Base',
+                web_search: 'Searching the Web for real-time info',
+                check_available_slots: 'Checking doctor appointment slots',
+                book_appointment: 'Confirming booking on Cal.com',
+              };
+
               const currentStatus = STATUS_CONFIG[orbState] || STATUS_CONFIG.idle;
+              const displayText =
+                isToolRunning && orbState === 'thinking'
+                  ? (TOOL_STATUS_LABELS[activeToolType] || 'Agent is executing tool')
+                  : currentStatus.text;
+
+              const displayColor = isToolRunning && orbState === 'thinking' ? '#38bdf8' : currentStatus.color;
+
               return (
                 <div className="mt-8 sm:mt-10 text-center min-h-[36px] flex items-center justify-center">
                   <ShimmeringText
-                    text={currentStatus.text}
+                    text={displayText}
                     className="font-outfit text-sm sm:text-base md:text-lg font-bold tracking-normal drop-shadow-sm"
-                    color={currentStatus.color}
+                    color={displayColor}
                     shimmerColor={currentStatus.shimmerColor}
                     showDots={currentStatus.showDots}
-                    duration={4.0}
+                    duration={3.0}
                   />
                 </div>
               );
             })()}
+
           </div>
 
           {/* Bottom LiveKit Control Dock */}
