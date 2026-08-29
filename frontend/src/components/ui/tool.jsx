@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { cn } from '../../lib/utils';
-import { Database, Globe, CheckCircle2, Loader2, ChevronDown, Wrench } from 'lucide-react';
+import { Database, Globe, Calendar, CheckCircle2, Loader2, ChevronDown, Wrench } from 'lucide-react';
 
 export function Tool({ toolPart = {}, defaultOpen = false, className }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -8,7 +8,8 @@ export function Tool({ toolPart = {}, defaultOpen = false, className }) {
 
   const isRag = type.includes('rag');
   const isWeb = type.includes('web');
-  const Icon = isRag ? Database : isWeb ? Globe : Wrench;
+  const isCal = type.includes('slot') || type.includes('appointment') || type.includes('cal');
+  const Icon = isRag ? Database : isWeb ? Globe : isCal ? Calendar : Wrench;
 
   const isStreaming = state === 'input-streaming';
 

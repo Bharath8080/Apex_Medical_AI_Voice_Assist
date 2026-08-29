@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import sys
 from loguru import logger
@@ -52,7 +53,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 import os
 
-from src import config, rag_engine
+from src import config, rag_engine, calcom_engine
 
 logger.remove()
 logger.add(
@@ -230,18 +231,46 @@ async def run_bot(websocket_client):
         notify_tool("web_search", "output-available", {"query": query}, res_str)
         return res_str
 
+    @tool
+    def check_available_slots(start_time: str = "", end_time: str = "") -> str:
+        """Check open doctor consultation slots on Cal.com. Optional ISO 8601 start_time and end_time."""
+        notify_tool("check_available_slots", "input-streaming", {"start": start_time, "end": end_time})
+        res = calcom_engine.get_available_slots(start_time, end_time)
+        notify_tool("check_available_slots", "output-available", {"start": start_time, "end": end_time}, res)
+        return res
+
+    @tool
+    def book_appointment(start_time: str, name: str, email: str, time_zone: str = "Asia/Kolkata") -> str:
+        """Book a doctor appointment on Cal.com once patient agrees on a slot and provides their full name and email."""
+        notify_tool("book_appointment", "input-streaming", {"start": start_time, "name": name, "email": email})
+        res = calcom_engine.book_appointment(start_time, name, email, time_zone)
+        notify_tool("book_appointment", "output-available", {"start": start_time, "name": name, "email": email}, res)
+        return res
+
+    current_time_str = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+
     system_prompt = (
-        "You are the AI Medical Receptionist for Apex Care Hospital. "
-        "Use rag_search first for any hospital-related question. "
-        "Use web_search only if the hospital guide has no relevant answer. "
-        "Never diagnose, interpret labs, or suggest dosages. "
-        "For emergencies (chest pain, stroke, breathing difficulty), advise calling 911 immediately. "
-        "Keep responses concise and natural for voice — no markdown or special symbols."
+        f"Today's date and time is {current_time_str}.\n"
+        "You are the warm, professional AI Medical Receptionist for Apex Care Hospital.\n"
+        "You have access to 4 tools:\n"
+        "1. rag_search: Search internal hospital policies, visiting hours, test prep, insurance.\n"
+        "2. web_search: Search the internet for general medical info or drug questions.\n"
+        "3. check_available_slots: Fetch open doctor appointment slots on Cal.com.\n"
+        "4. book_appointment: Confirm a booking on Cal.com using start_time (ISO 8601), name, and email.\n\n"
+        "Appointment Scheduling Flow:\n"
+        "- When a patient asks to book an appointment (e.g., 'for tomorrow' or 'next Monday'), resolve the exact date using today's date and call check_available_slots to find open timings.\n"
+        "- Suggest 2-3 specific time options to the caller.\n"
+        "- Once the patient chooses a slot, ask for their full name and email address.\n"
+        "- Confirm the email back to the patient to ensure voice transcription accuracy before calling book_appointment.\n\n"
+        "Clinical Safety Rules:\n"
+        "- Never diagnose conditions, interpret lab results, or suggest medication dosages.\n"
+        "- For emergencies (chest pain, stroke, breathing difficulty), advise calling 911 immediately.\n"
+        "- Keep responses concise and natural for voice — 1 to 2 spoken sentences, no markdown or special symbols."
     )
 
     agent = create_react_agent(
         model=groq_llm,
-        tools=[rag_search, web_search],
+        tools=[rag_search, web_search, check_available_slots, book_appointment],
         prompt=system_prompt,
         checkpointer=MemorySaver(),
     )
@@ -325,6 +354,8 @@ async def run_bot(websocket_client):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected to Voice Pipeline via FastAPI WebSocket.")
+        greeting = "Hello! Thank you for calling Apex Care Medical Center. I am your AI receptionist. How can I help you today?"
+        await bot_transcripts.process_frame(TextFrame(text=greeting), FrameDirection.DOWNSTREAM)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
