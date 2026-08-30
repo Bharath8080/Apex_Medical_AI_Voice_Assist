@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useVoiceAgent } from './hooks/useVoiceAgent';
 import { Orb } from './components/ui/orb';
+import { BackgroundWave } from './components/ui/background-wave';
 import { ShimmeringText } from './components/ui/shimmering-text';
 import { AgentControlBar } from './components/agents-ui/agent-control-bar';
 import { AgentChatTranscript } from './components/agents-ui/agent-chat-transcript';
+
 
 const STATUS_CONFIG = {
   idle: {
@@ -140,8 +142,12 @@ export function App() {
       <main className="flex-1 flex flex-col md:flex-row items-stretch justify-center p-3 sm:p-5 gap-4 min-h-0 relative overflow-hidden">
         {/* Assistant Tile */}
         <div className="flex-1 flex flex-col justify-between items-center rounded-2xl bg-[#0c0e12]/80 border border-white/10 p-4 sm:p-6 min-h-0 relative overflow-hidden">
+          {/* ElevenLabs Fluid Silk Wave Loop */}
+          <BackgroundWave colors={currentTheme.colors} />
+
+
           {/* Tile Header Label */}
-          <div className="w-full flex items-center justify-between shrink-0 font-outfit text-xs sm:text-sm tracking-wider text-neutral-400 font-bold uppercase">
+          <div className="w-full flex items-center justify-between shrink-0 font-outfit text-xs sm:text-sm tracking-wider text-neutral-400 font-bold uppercase z-10">
             <span>ASSISTANT</span>
             <span className="flex items-center gap-1.5">
               <span
@@ -159,63 +165,79 @@ export function App() {
             </span>
           </div>
 
-          {/* Visualizer Hero Area (Dedicated 3D Orb) */}
-          <div className="flex-1 w-full flex flex-col items-center justify-center min-h-0 my-auto">
-            <div className="w-64 h-64 sm:w-80 sm:h-80 flex items-center justify-center relative">
-              <Orb
-                agentState={
-                  orbState === 'speaking'
-                    ? 'talking'
+          {/* Visualizer Hero Area (Dedicated Floating Center Box) */}
+          <div className="flex-1 w-full flex flex-col items-center justify-center min-h-0 my-auto z-10 py-2">
+            <div className="w-full max-w-[340px] sm:max-w-[380px] rounded-[30px] bg-[#0d0f14]/85 border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur-2xl p-5 sm:p-6 flex flex-col items-center justify-between transition-all duration-300">
+              {/* Status Header */}
+              <div className="w-full text-center pb-1">
+                <span className="font-outfit text-xs font-bold uppercase tracking-wider text-neutral-400">
+                  {orbState === 'speaking'
+                    ? 'Agent Speaking'
                     : orbState === 'listening'
-                    ? 'listening'
+                    ? 'Agent Listening'
                     : orbState === 'thinking'
-                    ? 'thinking'
-                    : null
-                }
-                volumeMode="manual"
-                manualInput={inputVolume}
-                manualOutput={outputVolume}
-                colors={currentTheme.colors}
-                className="w-full h-full"
-              />
+                    ? 'Agent Processing'
+                    : 'Voice Assistant'}
+                </span>
+              </div>
+
+              {/* 3D Voice Orb */}
+              <div className="w-52 h-52 sm:w-60 sm:h-60 flex items-center justify-center relative my-1">
+                <Orb
+                  agentState={
+                    orbState === 'speaking'
+                      ? 'talking'
+                      : orbState === 'listening'
+                      ? 'listening'
+                      : orbState === 'thinking'
+                      ? 'thinking'
+                      : null
+                  }
+                  volumeMode="manual"
+                  manualInput={inputVolume}
+                  manualOutput={outputVolume}
+                  colors={currentTheme.colors}
+                  className="w-full h-full"
+                />
+              </div>
+
+              {/* Subtitle status with Fluid ShimmeringText Animation */}
+              {(() => {
+                const latestToolMessage = [...messages].reverse().find((m) => m.type === 'tool' && m.toolPart);
+                const isToolRunning = latestToolMessage && latestToolMessage.toolPart?.state === 'input-streaming';
+                const activeToolType = latestToolMessage?.toolPart?.type;
+
+                const TOOL_STATUS_LABELS = {
+                  rag_search: 'Searching Apex Hospital Knowledge Base',
+                  web_search: 'Searching the Web for real-time info',
+                  check_available_slots: 'Checking doctor appointment slots',
+                  book_appointment: 'Confirming booking on Cal.com',
+                };
+
+                const currentStatus = STATUS_CONFIG[orbState] || STATUS_CONFIG.idle;
+                const displayText =
+                  isToolRunning && orbState === 'thinking'
+                    ? (TOOL_STATUS_LABELS[activeToolType] || 'Agent is executing tool')
+                    : currentStatus.text;
+
+                const displayColor = isToolRunning && orbState === 'thinking' ? '#38bdf8' : currentStatus.color;
+
+                return (
+                  <div className="w-full text-center pt-2 min-h-[34px] flex items-center justify-center">
+                    <ShimmeringText
+                      text={displayText}
+                      className="font-outfit text-xs sm:text-sm font-bold tracking-normal drop-shadow-sm"
+                      color={displayColor}
+                      shimmerColor={currentStatus.shimmerColor}
+                      showDots={currentStatus.showDots}
+                      duration={3.0}
+                    />
+                  </div>
+                );
+              })()}
             </div>
-
-            {/* Subtitle status with Fluid ShimmeringText Animation */}
-            {(() => {
-              const latestToolMessage = [...messages].reverse().find((m) => m.type === 'tool' && m.toolPart);
-              const isToolRunning = latestToolMessage && latestToolMessage.toolPart?.state === 'input-streaming';
-              const activeToolType = latestToolMessage?.toolPart?.type;
-
-              const TOOL_STATUS_LABELS = {
-                rag_search: 'Searching Apex Hospital Knowledge Base',
-                web_search: 'Searching the Web for real-time info',
-                check_available_slots: 'Checking doctor appointment slots',
-                book_appointment: 'Confirming booking on Cal.com',
-              };
-
-              const currentStatus = STATUS_CONFIG[orbState] || STATUS_CONFIG.idle;
-              const displayText =
-                isToolRunning && orbState === 'thinking'
-                  ? (TOOL_STATUS_LABELS[activeToolType] || 'Agent is executing tool')
-                  : currentStatus.text;
-
-              const displayColor = isToolRunning && orbState === 'thinking' ? '#38bdf8' : currentStatus.color;
-
-              return (
-                <div className="mt-8 sm:mt-10 text-center min-h-[36px] flex items-center justify-center">
-                  <ShimmeringText
-                    text={displayText}
-                    className="font-outfit text-sm sm:text-base md:text-lg font-bold tracking-normal drop-shadow-sm"
-                    color={displayColor}
-                    shimmerColor={currentStatus.shimmerColor}
-                    showDots={currentStatus.showDots}
-                    duration={3.0}
-                  />
-                </div>
-              );
-            })()}
-
           </div>
+
 
           {/* Bottom LiveKit Control Dock */}
           <div className="w-full flex items-center justify-center shrink-0 pt-2">
