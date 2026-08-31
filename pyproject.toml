@@ -21,4 +21,5 @@ dependencies = [
     "langchain-tavily>=0.2.18",
     "langgraph>=1.2.2",
     "reportlab>=5.0.1",
+    "langchain-cohere>=0.6.0",
 ]

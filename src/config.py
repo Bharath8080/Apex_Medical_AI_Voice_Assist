@@ -9,8 +9,9 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY", "")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-CALCOM_API_KEY = os.getenv("CALCOM_API_KEY", "cal_live_98287e864816b077ee0353bf1339cae3")
-CALCOM_EVENT_TYPE_ID = int(os.getenv("CALCOM_EVENT_TYPE_ID", "6863049"))
+CALCOM_API_KEY = os.getenv("CALCOM_API_KEY")
+CALCOM_EVENT_TYPE_ID = int(os.getenv("CALCOM_EVENT_TYPE_ID"))
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
 # Groq STT & LLM
 GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo")
