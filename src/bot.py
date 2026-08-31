@@ -54,7 +54,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 import os
 
-from src import config, rag_engine, calcom_engine, db_logger
+from src import config, rag_engine, cal, db
 
 logger.remove()
 logger.add(
@@ -244,7 +244,7 @@ async def run_bot(websocket_client):
 
     @tool
     def rag_search(query: str) -> str:
-        """Search Apex Care Hospital's knowledge base: visiting hours, test prep, insurance, policies, prescriptions."""
+        """Search Apex Care Hospital knowledge base: visiting hours, operating hours & 24/7 pharmacy, diagnostic test prep, accepted insurance & billing, patient intake forms, referral requirements, late arrivals & cancellation policies, inpatient admission deposits, medical records turnaround, telehealth eligibility, parking & amenities, patient rights & language interpretation."""
         notify_tool("rag_search", "input-streaming", {"query": query})
         res = rag_engine.retrieve_context(query, top_k=3)
         notify_tool("rag_search", "output-available", {"query": query}, res)
@@ -255,7 +255,7 @@ async def run_bot(websocket_client):
 
     @tool
     def web_search(query: str) -> str:
-        """Search the internet for real-time medical info not found in the hospital guide."""
+        """Search the web for general medical topics, symptoms, medications, drug interactions, diseases, treatments, home remedies, recovery advice, and health information not specific to hospital policies."""
         notify_tool("web_search", "input-streaming", {"query": query})
         res = tavily_search.invoke(query)
         res_str = str(res)
@@ -266,7 +266,7 @@ async def run_bot(websocket_client):
     def check_available_slots(start_time: str = "", end_time: str = "") -> str:
         """Check open doctor consultation slots on Cal.com. Optional ISO 8601 start_time and end_time."""
         notify_tool("check_available_slots", "input-streaming", {"start": start_time, "end": end_time})
-        res = calcom_engine.get_available_slots(start_time, end_time)
+        res = cal.get_available_slots(start_time, end_time)
         notify_tool("check_available_slots", "output-available", {"start": start_time, "end": end_time}, res)
         return res
 
@@ -281,7 +281,7 @@ async def run_bot(websocket_client):
     ) -> str:
         """Book a doctor appointment on Cal.com with patient intake details (insurance and reason for visit)."""
         notify_tool("book_appointment", "input-streaming", {"start": start_time, "name": name, "email": email})
-        res = calcom_engine.book_appointment(start_time, name, email, insurance_provider, reason_for_visit, time_zone)
+        res = cal.book_appointment(start_time, name, email, insurance_provider, reason_for_visit, time_zone)
         notify_tool("book_appointment", "output-available", {"start": start_time, "name": name, "email": email}, res)
         return res
 
@@ -290,21 +290,22 @@ async def run_bot(websocket_client):
     system_prompt = (
         f"Today's date and time is {current_time_str}.\n"
         "You are the warm, professional AI Medical Receptionist for Apex Care Hospital.\n\n"
+        "VOICE RECEPTIONIST CONVERSATION RULES (CRITICAL):\n"
+        "- ALWAYS keep your spoken response strictly to 1 to 2 short, natural sentences.\n"
+        "- Be direct, warm, and concise. Never give long explanations, paragraphs, or essay-like responses.\n"
+        "- NEVER use bullet points, numbered lists, markdown (*, _, #), or parenthesis.\n"
+        "- NEVER repeat dates or times multiple times. Summarize tool outputs in 1-2 clear spoken lines.\n\n"
         "GREETINGS & CASUAL CHIT-CHAT (DO NOT CALL ANY TOOLS):\n"
-        "- If the caller says a greeting (like 'Hi', 'Hello', 'Good morning', 'How are you?'), DO NOT call any tool! Respond directly and warmly: 'Hello! Welcome to Apex Care Medical Center. How can I help you today?'\n"
-        "- If the caller says thank you or goodbye, reply warmly without calling tools.\n\n"
-        "VOICE CONVERSATION GUIDELINES:\n"
-        "- Speak naturally in short, warm sentences (1 to 2 spoken sentences per turn).\n"
-        "- NEVER repeat the date or day multiple times when listing slots. Say: 'On Wednesday, August 31st, we have openings at 8:00 AM, 8:30 AM, or 9:00 AM. Which works best for you?'\n"
-        "- NEVER use bullet points, numbered lists, markdown (*, _, #), or parenthesis.\n\n"
-        "STEP-BY-STEP APPOINTMENT INTAKE (ASK IN 2 NATURAL STEPS — NEVER ASK ALL 4 AT ONCE):\n"
-        "1. Check Slots: When the caller explicitly asks about appointment timings or booking, call check_available_slots and offer 2-3 open times in one clean sentence.\n"
-        "2. Step 1 (Name & Email): Once the caller picks a slot, ask ONLY for their Full Name and Email address (e.g. 'Great, 9:00 AM. May I have your full name and email address?').\n"
-        "3. Step 2 (Insurance & Symptoms): Once they provide name and email, ask for their Insurance Provider and Reason for visit (e.g. 'Thank you. What is your insurance provider, and what symptoms bring you in today?').\n"
-        "4. Confirm & Book: Read the email back to ensure accuracy, call book_appointment, and remind them to arrive 10 minutes early.\n\n"
-        "WHEN TO CALL TOOLS (ONLY FOR FACTUAL INQUIRIES & ACTIONS):\n"
-        "- rag_search: Hospital policies, visiting hours, test prep, accepted insurance, departments.\n"
-        "- web_search: General medical topics, drug interactions, symptoms, or medical knowledge.\n"
+        "- If the caller says a greeting (like 'Hi', 'Hello', 'Good morning', 'How are you?'), DO NOT call any tool! Respond directly in one short sentence: 'Hello! Welcome to Apex Care Medical Center. How can I help you today?'\n"
+        "- If the caller says thank you or goodbye, reply warmly in one sentence without calling tools.\n\n"
+        "STEP-BY-STEP APPOINTMENT INTAKE (2 SIMPLE NATURAL STEPS):\n"
+        "1. Check Slots: When the caller asks about slots or booking, call check_available_slots and offer 2-3 times in one sentence.\n"
+        "2. Step 1 (Name & Email): Once they pick a time, ask ONLY for their Full Name and Email address in one sentence.\n"
+        "3. Step 2 (Insurance & Symptoms): Once provided, ask for Insurance Provider and Reason for visit in one sentence.\n"
+        "4. Confirm & Book: Read the email back to verify, call book_appointment, and confirm in one sentence.\n\n"
+        "TOOL USAGE RULES (ALWAYS CALL TOOLS FOR FACTUAL & MEDICAL INQUIRIES):\n"
+        "- web_search: Call this for ANY general medical question, symptoms, medications, drug interactions, disease overviews, home remedies, recovery times, or health questions. Always perform a web search to give accurate medical facts, then summarize in 1-2 sentences.\n"
+        "- rag_search: Call this for ANY Apex Care Hospital specific query: visiting hours (General Wards/ICU/NICU/Maternity), clinic hours, 24/7 pharmacy, patient intake & forms (G-101, H-202, P-303, F-404), specialist referral rules, check-in & late arrival policies, cancellation fees, accepted insurance plans, co-pays & hardship plans, diagnostic test prep, medical records & portal, admission deposits & checkout, parking fees & validation, telehealth eligibility, patient rights, and language interpretation.\n"
         "- check_available_slots: Checking open doctor appointment slots on Cal.com.\n"
         "- book_appointment: Confirming a booking on Cal.com.\n\n"
         "Clinical Safety Rules:\n"
@@ -418,7 +419,7 @@ async def run_bot(websocket_client):
         logger.info("Client disconnected from voice pipeline. Triggering post-call extraction...")
         await task.queue_frames([EndFrame()])
         if session_history:
-            asyncio.create_task(asyncio.to_thread(db_logger.extract_and_log_call, session_history))
+            asyncio.create_task(asyncio.to_thread(db.extract_and_log_call, session_history))
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)

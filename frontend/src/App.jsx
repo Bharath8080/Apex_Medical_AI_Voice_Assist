@@ -100,11 +100,11 @@ export function App() {
       {/* 1. LiveKit Header */}
       <header className="h-14 px-4 sm:px-6 flex items-center justify-between border-b border-white/10 shrink-0 bg-[#0a0c0f]">
         <div className="flex items-center gap-3">
-          <div className="w-6 h-6 rounded-md bg-white/10 border border-white/20 flex items-center justify-center text-white font-outfit font-bold text-xs">
-            LK
+          <div className="w-7 h-7 rounded-md bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-400 font-outfit font-bold text-xs">
+            AM
           </div>
           <span className="font-outfit text-xs sm:text-sm font-bold tracking-wider text-neutral-200 uppercase">
-            LiveKit Voice RAG
+            Apex Medical Voice Assistant
           </span>
         </div>
 

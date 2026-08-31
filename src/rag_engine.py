@@ -1,22 +1,27 @@
 import os
+import uuid
+import atexit
+import warnings
+
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from loguru import logger
 from pydantic import BaseModel
-
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
+from qdrant_client import QdrantClient, models
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db")
+QDRANT_PATH = os.path.join(BASE_DIR, "qdrant_db")
 COLLECTION_NAME = "rag_docs"
 
-CHUNK_SIZE = 800
+DENSE_MODEL  = "BAAI/bge-base-en-v1.5"
+SPARSE_MODEL = "Qdrant/bm25"
+DENSE_FIELD  = "dense"
+SPARSE_FIELD = "sparse"
+
+CHUNK_SIZE    = 800
 CHUNK_OVERLAP = 200
-
-
 DEFAULT_PDF_PATH = os.path.join(BASE_DIR, "data", "guide.pdf")
 
 
@@ -26,13 +31,9 @@ class IngestResult(BaseModel):
     chunks: int
 
 
-# FastEmbed Embeddings, Text Splitter & Chroma Store
-_embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-base-en-v1.5")
-_vectorstore = Chroma(
-    collection_name=COLLECTION_NAME,
-    persist_directory=CHROMA_PATH,
-    embedding_function=_embeddings,
-)
+_client = QdrantClient(path=QDRANT_PATH)
+atexit.register(_client.close)
+
 _text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
@@ -41,45 +42,81 @@ _text_splitter = RecursiveCharacterTextSplitter(
 
 
 def ingest_pdf(file_path: str = DEFAULT_PDF_PATH, filename: str = "guide.pdf") -> IngestResult:
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"PDF file not found at: {file_path}")
-
-    logger.info(f"Loading PDF: {filename} from {file_path}...")
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
-    logger.info(f"  {len(pages)} pages loaded.")
-
-    logger.info(f"Chunking (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
+    pages = PyPDFLoader(file_path).load()
     chunks = _text_splitter.split_documents(pages)
 
-    # Tag each chunk
+    vectors = []
+    payloads = []
+    ids = []
+
     for i, chunk in enumerate(chunks):
-        chunk.metadata["source"] = "guide"
-        chunk.metadata["chunk_index"] = i
-        chunk.metadata["filename"] = filename
+        text = chunk.page_content.strip()
+        vectors.append({
+            DENSE_FIELD:  models.Document(text=text, model=DENSE_MODEL),
+            SPARSE_FIELD: models.Document(text=text, model=SPARSE_MODEL),
+        })
+        payloads.append({
+            "text": text,
+            "filename": filename,
+            "chunk_index": i,
+            "page": chunk.metadata.get("page", 0),
+        })
+        ids.append(str(uuid.uuid4()))
 
-    logger.info(f"  {len(chunks)} chunks produced.")
-    logger.info(f"Storing in Chroma collection '{COLLECTION_NAME}'...")
-    _vectorstore.add_documents(chunks)
-
-    return IngestResult(
-        status="success",
-        filename=filename,
-        chunks=len(chunks),
+    _client.upload_collection(
+        collection_name=COLLECTION_NAME,
+        vectors=vectors,
+        payload=payloads,
+        ids=ids,
+        batch_size=32,
     )
+
+    return IngestResult(status="success", filename=filename, chunks=len(chunks))
+
+
+if not _client.collection_exists(COLLECTION_NAME):
+    _client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config={
+            DENSE_FIELD: models.VectorParams(
+                size=_client.get_embedding_size(DENSE_MODEL),
+                distance=models.Distance.COSINE,
+            )
+        },
+        sparse_vectors_config={
+            SPARSE_FIELD: models.SparseVectorParams(
+                index=models.SparseIndexParams(on_disk=False)
+            )
+        },
+    )
+    if os.path.exists(DEFAULT_PDF_PATH):
+        ingest_pdf(DEFAULT_PDF_PATH)
+elif _client.get_collection(COLLECTION_NAME).points_count == 0:
+    if os.path.exists(DEFAULT_PDF_PATH):
+        ingest_pdf(DEFAULT_PDF_PATH)
 
 
 def retrieve_context(query: str, top_k: int = 3) -> str:
-    try:
-        docs = _vectorstore.similarity_search(query, k=top_k)
-        return "\n\n".join(d.page_content.strip() for d in docs) if docs else "No relevant information found."
-    except Exception as e:
-        logger.error(f"ChromaDB retrieval error: {e}")
+    results = _client.query_points(
+        collection_name=COLLECTION_NAME,
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        prefetch=[
+            models.Prefetch(
+                query=models.Document(text=query, model=DENSE_MODEL),
+                using=DENSE_FIELD,
+                limit=top_k * 3,
+            ),
+            models.Prefetch(
+                query=models.Document(text=query, model=SPARSE_MODEL),
+                using=SPARSE_FIELD,
+                limit=top_k * 3,
+            ),
+        ],
+        limit=top_k,
+        with_payload=True,
+    ).points
+
+    if not results:
         return "No relevant information found."
 
-
-if __name__ == "__main__":
-    res = ingest_pdf()
-    print(f"Successfully ingested {res.chunks} chunks from {res.filename} into ChromaDB!")
-    sample = retrieve_context("What are the visiting hours for ICU and General Wards?")
-    print(f"\n[Verification Query - Visiting Hours]:\n{sample}")
+    return "\n\n".join(p.payload["text"] for p in results)

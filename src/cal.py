@@ -134,5 +134,3 @@ def book_appointment(
 
     except Exception as error:
         return f"Error booking appointment: {str(error)}"
-
-
