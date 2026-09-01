@@ -10,6 +10,7 @@ class BookingPayload(BaseModel):
     start_time: str
     name: str
     email: str
+    phone_number: str = ""
     insurance_provider: str = ""
     reason_for_visit: str = ""
     time_zone: str = "Asia/Kolkata"
@@ -78,6 +79,7 @@ def book_appointment(
     start_time: str,
     name: str,
     email: str,
+    phone_number: str = "",
     insurance_provider: str = "",
     reason_for_visit: str = "",
     time_zone: str = "Asia/Kolkata",
@@ -89,12 +91,15 @@ def book_appointment(
         start_time=start_time,
         name=name,
         email=email,
+        phone_number=phone_number,
         insurance_provider=insurance_provider,
         reason_for_visit=reason_for_visit,
         time_zone=time_zone,
     )
 
     notes_parts = []
+    if booking.phone_number:
+        notes_parts.append(f"Phone: {booking.phone_number}")
     if booking.insurance_provider:
         notes_parts.append(f"Insurance: {booking.insurance_provider}")
     if booking.reason_for_visit:

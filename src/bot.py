@@ -33,10 +33,11 @@ from pipecat.serializers.base_serializer import FrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.flux.tts import DeepgramFluxTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTService
+from pipecat.services.elevenlabs.stt import CommitStrategy, ElevenLabsRealtimeSTTService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.groq.stt import GroqSTTService
 from pipecat.services.tts_service import TextAggregationMode
+from pipecat.transcriptions.language import Language
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -190,8 +191,13 @@ async def run_bot(websocket_client):
     # 1. STT with 3-Tier Failover
     elevenlabs_stt = ElevenLabsRealtimeSTTService(
         api_key=config.ELEVENLABS_API_KEY,
+        commit_strategy=CommitStrategy.VAD,
         settings=ElevenLabsRealtimeSTTService.Settings(
             model="scribe_v2_realtime",
+            language=Language.EN,
+            filter_background_audio=True,
+            vad_silence_threshold_secs=0.8,
+            vad_threshold=0.4,
         ),
     )
 
@@ -211,7 +217,7 @@ async def run_bot(websocket_client):
     )
 
     stt_switcher = ServiceSwitcher(
-        services=[elevenlabs_stt, groq_stt, deepgram_stt],
+        services=[elevenlabs_stt, deepgram_stt, groq_stt],
         strategy_type=ServiceSwitcherStrategyFailover,
     )
 
@@ -275,13 +281,14 @@ async def run_bot(websocket_client):
         start_time: str,
         name: str,
         email: str,
+        phone_number: str = "",
         insurance_provider: str = "",
         reason_for_visit: str = "",
         time_zone: str = "Asia/Kolkata",
     ) -> str:
-        """Book a doctor appointment on Cal.com with patient intake details (insurance and reason for visit)."""
+        """Book a doctor appointment on Cal.com with patient intake details (phone, insurance, reason for visit)."""
         notify_tool("book_appointment", "input-streaming", {"start": start_time, "name": name, "email": email})
-        res = cal.book_appointment(start_time, name, email, insurance_provider, reason_for_visit, time_zone)
+        res = cal.book_appointment(start_time, name, email, phone_number, insurance_provider, reason_for_visit, time_zone)
         notify_tool("book_appointment", "output-available", {"start": start_time, "name": name, "email": email}, res)
         return res
 
@@ -298,13 +305,13 @@ async def run_bot(websocket_client):
         "GREETINGS & CASUAL CHIT-CHAT (DO NOT CALL ANY TOOLS):\n"
         "- If the caller says a greeting (like 'Hi', 'Hello', 'Good morning', 'How are you?'), DO NOT call any tool! Respond directly in one short sentence: 'Hello! Welcome to Apex Care Medical Center. How can I help you today?'\n"
         "- If the caller says thank you or goodbye, reply warmly in one sentence without calling tools.\n\n"
-        "STEP-BY-STEP APPOINTMENT INTAKE (2 SIMPLE NATURAL STEPS):\n"
-        "1. Check Slots: When the caller asks about slots or booking, call check_available_slots and offer 2-3 times in one sentence.\n"
-        "2. Step 1 (Name & Email): Once they pick a time, ask ONLY for their Full Name and Email address in one sentence.\n"
-        "3. Step 2 (Insurance & Symptoms): Once provided, ask for Insurance Provider and Reason for visit in one sentence.\n"
-        "4. Confirm & Book: Read the email back to verify, call book_appointment, and confirm in one sentence.\n\n"
+        "STRICT STEP-BY-STEP APPOINTMENT INTAKE (CRITICAL: EXECUTE ONLY ONE STEP PER TURN - NEVER BUNDLE STEPS):\n"
+        "1. Step 1 (Offer Timings ONLY): When the caller asks about slots or booking, call check_available_slots. Offer 2-3 times and ask ONLY: 'Which of these times works best for you?' DO NOT ask for name, email, or any personal details in this step!\n"
+        "2. Step 2 (Name & Email ONLY): After the caller chooses their preferred time, ask ONLY for their Full Name and Email address in one short sentence. DO NOT ask for insurance, phone, or symptoms yet!\n"
+        "3. Step 3 (Insurance, Mobile Number & Symptoms Recall): Once name and email are provided, check conversation history first! If the caller already mentioned their health issue or symptoms earlier in the call, recall and confirm it while asking for their Insurance Provider and Mobile Number in one sentence (e.g., 'I have your reason noted as [symptom/issue]—what insurance provider and phone number do you have?'). If they confirm or say yes, keep that reason; if they correct or change it, use their updated reason. Only ask for reason for visit if they have not mentioned any reason yet.\n"
+        "4. Step 4 (Cross-Check & Book): Read back the booking summary to cross-check (Time, Name, Email, Insurance, Phone), call book_appointment, and confirm in one sentence.\n\n"
         "TOOL USAGE RULES (ALWAYS CALL TOOLS FOR FACTUAL & MEDICAL INQUIRIES):\n"
-        "- web_search: Call this for ANY general medical question, symptoms, medications, drug interactions, disease overviews, home remedies, recovery times, or health questions. Always perform a web search to give accurate medical facts, then summarize in 1-2 sentences.\n"
+        "- web_search: Call this for ANY general medical question, symptoms, medications, drug interactions, disease overviews, home remedies, recovery times, or health questions. Always perform a web search to provide accurate medical facts, summarize briefly in 1-2 sentences, and append a short closing offer: 'Would you like to schedule an appointment with one of our doctors for that?'\n"
         "- rag_search: Call this for ANY Apex Care Hospital specific query: visiting hours (General Wards/ICU/NICU/Maternity), clinic hours, 24/7 pharmacy, patient intake & forms (G-101, H-202, P-303, F-404), specialist referral rules, check-in & late arrival policies, cancellation fees, accepted insurance plans, co-pays & hardship plans, diagnostic test prep, medical records & portal, admission deposits & checkout, parking fees & validation, telehealth eligibility, patient rights, and language interpretation.\n"
         "- check_available_slots: Checking open doctor appointment slots on Cal.com.\n"
         "- book_appointment: Confirming a booking on Cal.com.\n\n"
