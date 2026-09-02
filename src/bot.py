@@ -16,6 +16,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     TextFrame,
     TranscriptionFrame,
+    TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
@@ -141,7 +142,7 @@ class TranscriptBroadcaster(FrameProcessor):
                 await self._send(UserTranscriptPayload(text=frame.text.strip(), final=True))
                 await self._send(BotStatePayload(state="thinking"))
                 self._history.append({"role": "user", "text": frame.text.strip()})
-        elif isinstance(frame, TextFrame):
+        elif isinstance(frame, (TextFrame, TTSSpeakFrame)):
             if frame.text:
                 await self._send(BotTranscriptPayload(text=frame.text))
                 self._history.append({"role": "assistant", "text": frame.text.strip()})
@@ -303,7 +304,7 @@ async def run_bot(websocket_client):
         "- NEVER use bullet points, numbered lists, markdown (*, _, #), or parenthesis.\n"
         "- NEVER repeat dates or times multiple times. Summarize tool outputs in 1-2 clear spoken lines.\n\n"
         "GREETINGS & CASUAL CHIT-CHAT (DO NOT CALL ANY TOOLS):\n"
-        "- If the caller says a greeting (like 'Hi', 'Hello', 'Good morning', 'How are you?'), DO NOT call any tool! Respond directly in one short sentence: 'Hello! Welcome to Apex Care Medical Center. How can I help you today?'\n"
+        "- You have ALREADY welcomed the caller at the start of the call. If the caller replies with a greeting (like 'Hi', 'Hello', 'Good morning', 'Hey'), DO NOT repeat the welcome intro or hospital name! Acknowledge warmly and ask how you can assist them in one sentence, for example: 'Hello! Are you looking to schedule an appointment with one of our doctors, or do you have a question about our services or symptoms?'\n"
         "- If the caller says thank you or goodbye, reply warmly in one sentence without calling tools.\n\n"
         "STRICT APPOINTMENT INTAKE STATE MACHINE (MANDATORY: ONE STEP PER TURN):\n"
         "Turn 1 - Offer Available Slots ONLY:\n"
@@ -432,12 +433,14 @@ async def run_bot(websocket_client):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info("Client connected to Voice Pipeline via FastAPI WebSocket.")
+        logger.info("Client connected.")
+        greeting = "Hi there, welcome to Apex Medical Care Center! How may I help you today?"
+        await bot_transcripts.process_frame(TTSSpeakFrame(text=greeting), FrameDirection.DOWNSTREAM)
 
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected from voice pipeline. Triggering post-call extraction...")
+        logger.info("Client disconnected.")
         await task.queue_frames([EndFrame()])
         if session_history:
             asyncio.create_task(asyncio.to_thread(db.extract_and_log_call, session_history))

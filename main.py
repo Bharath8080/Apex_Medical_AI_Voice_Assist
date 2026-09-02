@@ -24,14 +24,14 @@ app.add_middleware(
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    logger.info("Client WebSocket connected to /ws")
+    logger.info("WS connected.")
 
     try:
         await run_bot(websocket)
     except WebSocketDisconnect:
-        logger.info("Client WebSocket disconnected.")
+        logger.info("WS disconnected.")
     except Exception as e:
-        logger.error(f"Pipecat bot exception: {e}")
+        logger.error(f"Bot error: {e}")
 
 
 # Serve production frontend bundle if built
