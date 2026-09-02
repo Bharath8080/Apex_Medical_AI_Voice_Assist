@@ -47,14 +47,23 @@ export function AgentChatTranscript({
           )}
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           {messages.length > 0 && onClear && (
-            <button onClick={onClear} className="p-1 rounded hover:bg-white/10 text-neutral-400 hover:text-rose-400 transition-colors cursor-pointer" title="Clear">
-              <Trash2 className="w-3.5 h-3.5" />
+            <button
+              onClick={onClear}
+              className="p-1.5 rounded-lg hover:bg-white/10 text-neutral-400 hover:text-rose-400 transition-colors cursor-pointer"
+              title="Clear transcript"
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
           )}
           {onClose && (
-            <button onClick={onClose} className="p-1 rounded hover:bg-white/10 text-neutral-400 hover:text-white transition-colors cursor-pointer" title="Close">
+            <button
+              onClick={onClose}
+              className="p-1.5 px-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 hover:text-white transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+              title="Close transcript"
+            >
+              <span className="text-xs font-semibold tracking-normal md:hidden">Close</span>
               <X className="w-4 h-4" />
             </button>
           )}

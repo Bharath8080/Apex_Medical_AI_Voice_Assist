@@ -182,7 +182,7 @@ export function App() {
               </div>
 
               {/* 3D Voice Orb */}
-              <div className="w-52 h-52 sm:w-60 sm:h-60 flex items-center justify-center relative my-1">
+              <div className="w-44 h-44 sm:w-60 sm:h-60 flex items-center justify-center relative my-1">
                 <Orb
                   agentState={
                     orbState === 'speaking'
@@ -257,7 +257,7 @@ export function App() {
 
         {/* Conversation Drawer / Tile */}
         {isChatOpen && (
-          <div className="w-full md:w-[380px] lg:w-[420px] h-[340px] md:h-full shrink-0 animate-in fade-in zoom-in-95 duration-200 min-w-0 overflow-hidden">
+          <div className="absolute inset-3 sm:inset-5 md:relative md:inset-auto w-auto md:w-[380px] lg:w-[420px] h-auto md:h-full z-30 shrink-0 animate-in fade-in slide-in-from-bottom-2 md:slide-in-from-bottom-0 md:zoom-in-95 duration-200 min-w-0 overflow-hidden">
             <AgentChatTranscript
               messages={messages}
               onSendMessage={sendMessage}
